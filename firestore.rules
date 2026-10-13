@@ -1,0 +1,179 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function verifiedMainAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'ashenperera993@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function userDocument(userId) {
+      return get(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function approvedAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDocument(request.auth.uid).data.role in ['admin', 'main_admin']
+        && userDocument(request.auth.uid).data.status == 'approved'
+        && userDocument(request.auth.uid).data.approved == true;
+    }
+
+    function approvedStudent() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDocument(request.auth.uid).data.role == 'student'
+        && userDocument(request.auth.uid).data.status == 'approved'
+        && userDocument(request.auth.uid).data.approved == true;
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role in ['student', 'admin']
+        && request.resource.data.status == 'pending'
+        && request.resource.data.approved == false
+        && request.resource.data.keys().hasAll([
+          'name', 'email', 'role', 'status', 'approved', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'role', 'status', 'approved', 'createdAt',
+          'admission', 'grade', 'phone'
+        ]);
+
+      allow create: if verifiedMainAdmin()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role == 'main_admin'
+        && request.resource.data.status == 'approved'
+        && request.resource.data.approved == true
+        && request.resource.data.keys().hasAll([
+          'name', 'email', 'role', 'status', 'approved', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'email', 'role', 'status', 'approved', 'createdAt'
+        ]);
+
+      allow read: if signedIn() && (request.auth.uid == userId || verifiedMainAdmin());
+
+      allow update: if verifiedMainAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'approved', 'reviewedAt', 'reviewedBy'
+        ])
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.approved == (request.resource.data.status == 'approved')
+        && request.resource.data.reviewedBy == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow create: if approvedStudent()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'createdAt'
+        ])
+        && request.resource.data.createdAt is timestamp;
+
+      allow read, update, delete: if approvedAdmin();
+    }
+  }
+}rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function mainAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'ashenperera993@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function approvedAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function approvedStudent() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function canManageSociety() {
+      return mainAdmin() || approvedAdmin();
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'pending'
+        && request.resource.data.approved == false
+        && request.resource.data.role in ['student', 'admin']
+        && request.resource.data.keys().hasAll(['name', 'email', 'role', 'status', 'approved', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'email', 'role', 'status', 'approved', 'createdAt', 'admission', 'grade', 'phone'])
+        && request.resource.data.name is string
+        && request.resource.data.createdAt is timestamp
+        && (request.resource.data.role != 'student'
+          || (request.resource.data.keys().hasAll(['admission', 'grade', 'phone'])
+            && request.resource.data.admission is string
+            && request.resource.data.grade is string
+            && request.resource.data.phone is string));
+
+      allow create: if mainAdmin()
+        && request.auth.uid == userId
+        && request.resource.data.email == 'ashenperera993@gmail.com'
+        && request.resource.data.role in ['main_admin', 'main-admin']
+        && request.resource.data.status == 'approved'
+        && request.resource.data.approved == true
+        && request.resource.data.createdAt is timestamp;
+
+      allow get: if signedIn() && (request.auth.uid == userId || mainAdmin());
+      allow list: if mainAdmin();
+
+      allow update: if mainAdmin()
+        && userId != request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approved', 'reviewedAt', 'reviewedBy'])
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.approved == (request.resource.data.status == 'approved');
+      allow delete: if mainAdmin() && userId != request.auth.uid;
+    }
+
+    match /orders/{orderId} {
+      allow create: if approvedStudent()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll(['uid', 'name', 'admission', 'grade', 'phone', 'size', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'admission', 'grade', 'phone', 'size', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.admission is string
+        && request.resource.data.grade is string
+        && request.resource.data.phone is string
+        && request.resource.data.size is string
+        && request.resource.data.createdAt is timestamp;
+      allow get, list: if canManageSociety()
+        || (approvedStudent() && resource.data.uid == request.auth.uid);
+      allow update: if canManageSociety()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'admission', 'grade', 'phone', 'size']);
+      allow delete: if canManageSociety();
+    }
+  }
+}
