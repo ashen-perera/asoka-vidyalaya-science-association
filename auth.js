@@ -3,6 +3,7 @@ const FIREBASE_VERSION = "13.0.0";
 const ENABLE_FIREBASE = true;
 let auth;
 let database;
+let storage;
 let modules;
 let currentProfile = null;
 let ordersUnsubscribe;
@@ -192,6 +193,7 @@ function friendlyError(error) {
     "auth/invalid-email": "Enter a valid email address.",
     "auth/network-request-failed": "Could not reach Firebase. Check your connection and authorized domains, then try again.",
     "permission-denied": "Firebase denied this action. Check that the Firestore rules are deployed.",
+    "storage/unauthorized": "Firebase Storage denied this action. Check that storage.rules is deployed and the account is approved.",
   };
   return known[error.code] || error.message || "Something went wrong. Please try again.";
 }
@@ -433,76 +435,105 @@ window.asokaSignOut = async () => {
   location.hash = "/admin/login";
 };
 
-function apiUrl(path) {
-  const baseUrl = (window.ASOKA_API_BASE_URL || "").trim().replace(/\/+$/, "");
-  return `${baseUrl}${path}`;
-}
-
 window.asokaCreateOrder = async (formData) => {
   if (!auth?.currentUser || currentProfile?.role !== "student" || currentProfile.status !== "approved") {
     location.hash = "/admin/login";
     return;
   }
+  const paymentSlip = formData.get("paymentSlip");
+  const order = {
+    uid: auth.currentUser.uid,
+    name: String(formData.get("name") || "").trim(),
+    admission: String(formData.get("admission") || "").trim(),
+    grade: String(formData.get("grade") || "").trim(),
+    phone: String(formData.get("phone") || "").trim(),
+    size: String(formData.get("size") || ""),
+    email: auth.currentUser.email || "",
+    quantity: Number(formData.get("quantity")),
+  };
+  if (!(paymentSlip instanceof File) || paymentSlip.size === 0) {
+    showOrderError("Choose a payment slip before submitting your order.");
+    return;
+  }
+  if (paymentSlip.size > 5 * 1024 * 1024 ||
+      !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(paymentSlip.type)) {
+    showOrderError("Payment slip must be a JPG, PNG, WEBP, or PDF file no larger than 5 MB.");
+    return;
+  }
+  if (!order.name || order.name.length > 80 ||
+      !order.admission || order.admission.length > 20 ||
+      !order.grade || order.grade.length > 30 ||
+      !/^[0-9+ ]{7,16}$/.test(order.phone) ||
+      !["S", "M", "L", "XL", "XXL"].includes(order.size) ||
+      !Number.isInteger(order.quantity) || order.quantity < 1 || order.quantity > 10) {
+    showOrderError("Please check your order details and try again.");
+    return;
+  }
+
+  const orderRef = modules.firestore.doc(modules.firestore.collection(database, "orders"));
+  const paymentSlipPath = `payment-slips/${auth.currentUser.uid}/${orderRef.id}`;
+  let uploadedSlip = false;
   try {
-    const token = await auth.currentUser.getIdToken();
-    const response = await fetch(apiUrl("/api/preorder"), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
+    await modules.storage.uploadBytes(
+      modules.storage.ref(storage, paymentSlipPath),
+      paymentSlip,
+      { contentType: paymentSlip.type }
+    );
+    uploadedSlip = true;
+    await modules.firestore.setDoc(orderRef, {
+      ...order,
+      paymentSlip: paymentSlipPath,
+      reference: orderRef.id,
+      createdAt: modules.firestore.serverTimestamp(),
     });
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.toLowerCase().includes("application/json")) {
-      throw new Error("The pre-order API is not available. Set the Node.js server URL in api-config.js and allow this website in the server's CORS_ORIGINS setting. GitHub Pages cannot process pre-orders by itself.");
-    }
-    let result;
-    try {
-      result = await response.json();
-    } catch {
-      throw new Error("The pre-order server returned an invalid response. Please try again later.");
-    }
-    if (!response.ok || !result.success) {
-      const status = document.querySelector("#order-status");
-      if (status) {
-        status.setAttribute("role", "alert");
-        status.setAttribute("aria-live", "assertive");
-        status.textContent = result.message || "Could not submit the pre-order. Please try again.";
-      }
-      return;
-    }
-    sessionStorage.setItem("asoka-order-success", result.message);
+    sessionStorage.setItem("asoka-order-success", "Your pre-order and payment slip have been submitted.");
     window.render?.();
   } catch (error) {
-    const status = document.querySelector("#order-status");
-    if (status) {
-      status.setAttribute("role", "alert");
-      status.setAttribute("aria-live", "assertive");
-      status.textContent = error instanceof TypeError
-        ? "Could not reach the order server. Check your connection and try again."
-        : friendlyError(error);
+    if (uploadedSlip) {
+      try {
+        await modules.storage.deleteObject(modules.storage.ref(storage, paymentSlipPath));
+      } catch (cleanupError) {
+        console.error("Could not remove an unlinked pre-order payment slip.", cleanupError);
+        showOrderError(`${friendlyError(error)} The uploaded slip could not be cleaned up; contact the society administrator.`);
+        return;
+      }
     }
+    showOrderError(friendlyError(error));
   }
 };
 
+function showOrderError(message) {
+  const status = document.querySelector("#order-status");
+  if (!status) return;
+  status.setAttribute("role", "alert");
+  status.setAttribute("aria-live", "assertive");
+  status.textContent = message;
+}
+
 window.asokaDownloadPaymentSlip = async (orderId) => {
-  if (!auth?.currentUser) {
+  if (!auth?.currentUser || !["admin", "main_admin"].includes(currentProfile?.role)) {
     location.hash = "/admin/login";
     return;
   }
   try {
-    const token = await auth.currentUser.getIdToken();
-    const response = await fetch(apiUrl(`/api/admin/orders/${encodeURIComponent(orderId)}/payment-slip`), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      let result;
-      try { result = await response.json(); } catch { result = null; }
-      throw new Error(result?.message || "Could not download this payment slip.");
+    const orderSnapshot = await modules.firestore.getDoc(modules.firestore.doc(database, "orders", orderId));
+    const paymentSlipPath = orderSnapshot.data()?.paymentSlip;
+    if (!orderSnapshot.exists() || typeof paymentSlipPath !== "string" ||
+        !/^payment-slips\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(paymentSlipPath)) {
+      throw new Error("No valid payment slip is attached to this order.");
     }
-    const blob = await response.blob();
+    const slipRef = modules.storage.ref(storage, paymentSlipPath);
+    const [bytes, metadata] = await Promise.all([
+      modules.storage.getBytes(slipRef, 5 * 1024 * 1024),
+      modules.storage.getMetadata(slipRef),
+    ]);
+    const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" }[metadata.contentType];
+    if (!extension) throw new Error("The payment slip has an unsupported file type.");
+    const blob = new Blob([bytes], { type: metadata.contentType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "payment-slip";
+    link.download = `payment-slip-${orderId}.${extension}`;
     document.body.append(link);
     link.click();
     link.remove();
@@ -512,9 +543,7 @@ window.asokaDownloadPaymentSlip = async (orderId) => {
     if (status) {
       status.setAttribute("role", "alert");
       status.setAttribute("aria-live", "assertive");
-      status.textContent = error instanceof TypeError
-        ? "Could not reach the order server. Check your connection and try again."
-        : error.message;
+      status.textContent = friendlyError(error);
     }
   }
 };
@@ -525,8 +554,18 @@ window.asokaUpdateOrder = async (id, changes) => {
 };
 
 window.asokaDeleteOrder = async (id) => {
-  try { await modules.firestore.deleteDoc(modules.firestore.doc(database, "orders", id)); }
-  catch (error) { renderApprovalQueueError(friendlyError(error)); }
+  try {
+    const orderRef = modules.firestore.doc(database, "orders", id);
+    const snapshot = await modules.firestore.getDoc(orderRef);
+    const paymentSlipPath = snapshot.data()?.paymentSlip;
+    if (typeof paymentSlipPath === "string" &&
+        /^payment-slips\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(paymentSlipPath)) {
+      await modules.storage.deleteObject(modules.storage.ref(storage, paymentSlipPath));
+    }
+    await modules.firestore.deleteDoc(orderRef);
+  } catch (error) {
+    renderApprovalQueueError(friendlyError(error));
+  }
 };
 
 async function initializeFirebase() {
@@ -548,15 +587,17 @@ async function initializeFirebase() {
     return;
   }
   try {
-    const [appSdk, authSdk, firestoreSdk] = await Promise.all([
+    const [appSdk, authSdk, firestoreSdk, storageSdk] = await Promise.all([
       import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-app.js`),
       import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-auth.js`),
       import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-firestore.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-storage.js`),
     ]);
-    modules = { auth: authSdk, firestore: firestoreSdk };
+    modules = { auth: authSdk, firestore: firestoreSdk, storage: storageSdk };
     const firebaseApp = appSdk.initializeApp(firebaseConfig);
     auth = authSdk.getAuth(firebaseApp);
     database = firestoreSdk.getFirestore(firebaseApp);
+    storage = storageSdk.getStorage(firebaseApp);
     firebaseConfigured = true;
     window.asokaFirebaseConfigured = true;
     authSdk.onAuthStateChanged(auth, async (user) => {
