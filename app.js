@@ -333,7 +333,35 @@ function committeePage() {
 
 function preorderPage() {
   const success = sessionStorage.getItem("asoka-order-success");
-  return `<main>${pageIntro("Society merchandise", "Wear your curiosity.", "A limited-run society T-shirt for experiments, events and every day in between. Reserve yours below.")}<section class="section"><div class="shell order-layout"><div class="shirt-stage" aria-label="Maroon society T-shirt mockup"><div class="shirt"></div><div class="shirt-crest">AV</div><div class="shirt-caption"><span>Science Society</span><span>Maroon · Cotton</span></div></div><div class="order-copy"><span class="product-kicker">The 2026 society tee</span><h2>Made for curious minds.</h2><p>Classic maroon, comfortable cotton and a small society crest. Place your pre-order and the committee will share collection details with your class.</p><div class="price-line"><strong>LKR 2,500</strong><span>per T-shirt · payment on collection</span></div><span class="eyebrow">Size guide · body measurements</span><table class="size-chart"><thead><tr><th>Size</th><th>Chest</th><th>Length</th></tr></thead><tbody><tr><td>S</td><td>36 in</td><td>26 in</td></tr><tr><td>M</td><td>38 in</td><td>27 in</td></tr><tr><td>L</td><td>40 in</td><td>28 in</td></tr><tr><td>XL</td><td>42 in</td><td>29 in</td></tr><tr><td>XXL</td><td>44 in</td><td>30 in</td></tr></tbody></table>${success ? `<div class="success-panel" role="status">${escapeHtml(success)} Your request is saved on this device. The society committee will confirm collection details.</div>` : ""}<form id="order-form"><div class="form-grid"><div class="field"><label for="student-name">Student name</label><input id="student-name" name="name" autocomplete="name" required maxlength="80" placeholder="Full name"></div><div class="field"><label for="admission">Admission number</label><input id="admission" name="admission" required maxlength="20" placeholder="e.g. 12345"></div><div class="field"><label for="grade">Grade / class</label><input id="grade" name="grade" required maxlength="30" placeholder="e.g. 10-A"></div><div class="field"><label for="phone">Phone number</label><input id="phone" name="phone" type="tel" autocomplete="tel" required pattern="[0-9+ ]{7,16}" maxlength="16" placeholder="07X XXX XXXX"></div><div class="field field-full"><label for="size">T-shirt size</label><select id="size" name="size" required><option value="">Choose a size</option>${["S", "M", "L", "XL", "XXL"].map((size) => `<option value="${size}">${size}</option>`).join("")}</select></div></div><p class="form-footnote">This is a pre-order request, not an online payment. Please check your contact number before submitting.</p><button class="button" type="submit">Place pre-order <span aria-hidden="true">→</span></button></form></div></div></section></main>`;
+  let profile = null;
+  try { profile = JSON.parse(sessionStorage.getItem("asoka-account-profile") || "null"); } catch { profile = null; }
+  return `<main class="preorder-page">
+    <section class="preorder-card" aria-labelledby="preorder-title">
+      <div class="preorder-heading">
+        <span class="product-kicker eyebrow">The 2026 society tee</span>
+        <h1 id="preorder-title">T-shirt pre-order</h1>
+        <p>Asoka Vidyalaya Science Society · Annual Exhibition</p>
+      </div>
+      <div class="preorder-product">
+        <strong>${escapeHtml(getSiteContent().productTitle)}</strong>
+        <span>LKR ${Number(getSiteContent().productPrice || 0).toLocaleString("en-US")} · payment on collection</span>
+      </div>
+      ${success ? `<div class="success-panel" role="status" aria-live="polite">${escapeHtml(success)} The society committee will confirm collection details.</div>` : ""}
+      <form id="order-form" aria-describedby="order-note">
+        <div class="preorder-fields">
+          <div class="field"><label for="student-name">Full name</label><input id="student-name" name="name" autocomplete="name" required maxlength="80" placeholder="Enter your full name" value="${escapeHtml(profile?.name || "")}"></div>
+          <div class="field"><label for="admission">Admission number</label><input id="admission" name="admission" required maxlength="20" placeholder="Enter your admission number" value="${escapeHtml(profile?.admission || "")}"></div>
+          <div class="field"><label for="grade">Grade / class</label><input id="grade" name="grade" required maxlength="30" placeholder="e.g. 12-M1" value="${escapeHtml(profile?.grade || "")}"></div>
+          <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required readonly value="${escapeHtml(profile?.email || "")}" aria-describedby="email-hint"><span class="field-hint" id="email-hint">Your account email is used for this order.</span></div>
+          <div class="field"><label for="phone">Phone number</label><input id="phone" name="phone" type="tel" autocomplete="tel" required pattern="[0-9+ ]{7,16}" maxlength="16" placeholder="07X XXX XXXX" aria-describedby="phone-hint" value="${escapeHtml(profile?.phone || "")}"><span class="field-hint" id="phone-hint">Use 7–16 characters: digits, spaces or +.</span></div>
+          <div class="field"><label for="size">T-shirt size</label><select id="size" name="size" required><option value="">Choose a size</option>${getSiteContent().sizes.map((item) => `<option value="${escapeHtml(item.size)}">${escapeHtml(item.size)}</option>`).join("")}</select></div>
+        </div>
+        <p class="form-footnote" id="order-note">This is a pre-order request, not an online payment. Please check your contact number before submitting.</p>
+        <p class="form-status" id="order-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <button class="button preorder-submit" type="submit">Place pre-order</button>
+      </form>
+    </section>
+  </main>`;
 }
 
 function loginPage() {
@@ -346,8 +374,8 @@ function registerPage() {
 
 function applyAccountGate(route) {
   if (route !== "/pre-order") return;
-  const layout = document.querySelector(".order-layout");
-  if (!layout) return;
+  const page = document.querySelector(".preorder-page");
+  if (!page) return;
   let profile = null;
   try { profile = JSON.parse(sessionStorage.getItem("asoka-account-profile") || "null"); } catch { profile = null; }
   const localDemoEnabled = window.asokaLocalDemoMode === true;
@@ -356,12 +384,12 @@ function applyAccountGate(route) {
     const message = !window.asokaFirebaseConfigured && !localDemoEnabled
       ? "Online ordering will open after the society Firebase project is connected."
       : profile ? "Only approved student accounts can place a pre-order." : "Sign in with an approved student account to place a pre-order.";
-    layout.innerHTML = `<section class="account-gate"><span class="eyebrow">Student account required</span><h2>Pre-orders are for approved students.</h2><p>${message}</p><div class="hero-actions"><a class="button" href="#/admin/login">Sign in</a><a class="button button-light" href="#/register">Register</a></div></section>`;
+    page.innerHTML = `<section class="preorder-card account-gate"><span class="eyebrow">Student account required</span><h1>Pre-orders are for approved students.</h1><p>${message}</p><div class="hero-actions"><a class="button" href="#/admin/login">Sign in</a><a class="button button-light" href="#/register">Register</a></div></section>`;
     return;
   }
   const form = document.querySelector("#order-form");
   if (!form) return;
-  for (const name of ["name", "admission", "grade", "phone"]) {
+  for (const name of ["name", "admission", "grade", "phone", "email"]) {
     const input = form.elements.namedItem(name);
     if (input) input.value = profile[name] || "";
   }
@@ -378,11 +406,45 @@ function dashboardPage() {
   const orders = getOrders();
   const events = getEvents().slice().sort((a, b) => a.date.localeCompare(b.date));
   const upcoming = events.filter((event) => event.date >= new Date().toISOString().slice(0, 10)).length;
-  return `<main class="shell dashboard"><div class="dashboard-top"><div><span class="eyebrow">Society administration</span><h1>Dashboard</h1><p>Pre-orders and upcoming events, in one place.</p></div><button class="button button-small" id="logout-button" type="button">Sign out</button></div><div class="dashboard-stats"><div class="dashboard-stat"><span>Total T-shirt pre-orders</span><strong>${orders.length}</strong></div><div class="dashboard-stat"><span>Events on calendar</span><strong>${events.length}</strong></div><div class="dashboard-stat"><span>Upcoming events</span><strong>${upcoming}</strong></div></div><div class="admin-grid"><section class="admin-panel"><div class="admin-panel-head"><h2>Pre-orders</h2><span class="eyebrow">${orders.length} total</span></div><div class="filter-row"><select id="filter-size" aria-label="Filter by size"><option value="">All sizes</option>${["S", "M", "L", "XL", "XXL"].map((size) => `<option value="${size}">${size}</option>`).join("")}</select><select id="filter-grade" aria-label="Filter by grade or class"><option value="">All grades / classes</option>${Array.from(new Set(orders.map((order) => order.grade))).sort().map((grade) => `<option value="${escapeHtml(grade)}">${escapeHtml(grade)}</option>`).join("")}</select></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Student</th><th>Admission</th><th>Grade / class</th><th>Phone</th><th>Size</th></tr></thead><tbody id="orders-body">${orders.length ? orders.slice().reverse().map((order) => `<tr data-size="${escapeHtml(order.size)}" data-grade="${escapeHtml(order.grade)}"><td>${escapeHtml(order.name)}</td><td>${escapeHtml(order.admission)}</td><td>${escapeHtml(order.grade)}</td><td>${escapeHtml(order.phone)}</td><td>${escapeHtml(order.size)}</td></tr>`).join("") : `<tr><td colspan="5" class="empty-table">No pre-orders yet. New requests will appear here.</td></tr>`}</tbody></table></div></section><section class="admin-panel"><div class="admin-panel-head"><h2>Manage events</h2><span class="eyebrow">${events.length} listed</span></div><form class="admin-form" id="event-form"><input type="hidden" name="id"><div class="field"><label for="event-title">Event title</label><input id="event-title" name="title" required maxlength="90" placeholder="e.g. Science Day"></div><div class="field"><label for="event-category">Category</label><input id="event-category" name="category" maxlength="40" placeholder="Workshop, showcase…"></div><div class="field"><label for="event-date">Date</label><input id="event-date" name="date" type="date" required></div><div class="field"><label for="event-location">Location</label><input id="event-location" name="location" required maxlength="80" placeholder="School hall"></div><div class="field"><label for="event-description">Short description</label><input id="event-description" name="description" required maxlength="180" placeholder="What will happen?"></div><button class="button button-small" type="submit" id="event-submit">Add event</button></form><div class="managed-events">${events.map((event) => `<div class="managed-event"><div><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.date)} · ${escapeHtml(event.location)}</span></div><div class="managed-actions"><button type="button" data-edit-event="${escapeHtml(event.id)}">Edit</button><button type="button" data-delete-event="${escapeHtml(event.id)}" aria-label="Delete ${escapeHtml(event.title)}">Delete</button></div></div>`).join("")}</div><div class="admin-hint">Event and order data is stored in this browser only. It is not shared across devices.</div></section></div></main>`;
+  return `<main class="shell dashboard" aria-labelledby="dashboard-title">
+    <div class="dashboard-top">
+      <div><span class="eyebrow">Society administration</span><h1 id="dashboard-title">Admin dashboard</h1><p>Pre-orders and upcoming events, in one place.</p><span class="dashboard-account">${escapeHtml(profile?.email || "")}</span></div>
+      <button class="button button-small" id="logout-button" type="button">Sign out</button>
+    </div>
+    <section class="dashboard-stats" aria-label="Dashboard summary">
+      <div class="dashboard-stat"><span>Total T-shirt pre-orders</span><strong>${orders.length}</strong></div>
+      <div class="dashboard-stat"><span>Events on calendar</span><strong>${events.length}</strong></div>
+      <div class="dashboard-stat"><span>Upcoming events</span><strong>${upcoming}</strong></div>
+    </section>
+    <div class="admin-grid">
+      <section class="admin-panel" aria-labelledby="orders-title">
+        <div class="admin-panel-head"><h2 id="orders-title">Pre-orders</h2><span class="eyebrow">${orders.length} total</span></div>
+        <div class="filter-row">
+          <label class="filter-field" for="filter-size"><span>Filter by size</span><select id="filter-size"><option value="">All sizes</option>${["S", "M", "L", "XL", "XXL"].map((size) => `<option value="${size}">${size}</option>`).join("")}</select></label>
+          <label class="filter-field" for="filter-grade"><span>Filter by grade or class</span><select id="filter-grade"><option value="">All grades / classes</option>${Array.from(new Set(orders.map((order) => order.grade))).sort().map((grade) => `<option value="${escapeHtml(grade)}">${escapeHtml(grade)}</option>`).join("")}</select></label>
+        </div>
+        <p id="orders-status" class="table-status" role="status" aria-live="polite" aria-atomic="true">${orders.length ? `Showing ${orders.length} pre-orders.` : "No pre-orders to display."}</p>
+        <div class="table-wrap" role="region" aria-label="T-shirt pre-orders" tabindex="0">
+          <table class="data-table">
+            <caption class="sr-only">T-shirt pre-orders</caption>
+            <thead><tr><th scope="col">Student</th><th scope="col">Admission</th><th scope="col">Grade / class</th><th scope="col">Phone</th><th scope="col">Size</th><th scope="col">Email</th></tr></thead>
+            <tbody id="orders-body">${orders.length ? orders.slice().reverse().map((order) => `<tr data-size="${escapeHtml(order.size)}" data-grade="${escapeHtml(order.grade)}"><th scope="row">${escapeHtml(order.name)}</th><td>${escapeHtml(order.admission)}</td><td>${escapeHtml(order.grade)}</td><td>${escapeHtml(order.phone)}</td><td>${escapeHtml(order.size)}</td><td>${escapeHtml(order.email || "—")}</td></tr>`).join("") : `<tr><td colspan="6" class="empty-table">No pre-orders yet. New requests will appear here.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="admin-panel" aria-labelledby="events-admin-title">
+        <div class="admin-panel-head"><h2 id="events-admin-title">Manage events</h2><span class="eyebrow">${events.length} listed</span></div>
+        <form class="admin-form" id="event-form"><input type="hidden" name="id"><div class="field"><label for="event-title">Event title</label><input id="event-title" name="title" required maxlength="90" placeholder="e.g. Science Day"></div><div class="field"><label for="event-category">Category</label><input id="event-category" name="category" maxlength="40" placeholder="Workshop, showcase…"></div><div class="field"><label for="event-date">Date</label><input id="event-date" name="date" type="date" required></div><div class="field"><label for="event-location">Location</label><input id="event-location" name="location" required maxlength="80" placeholder="School hall"></div><div class="field"><label for="event-description">Short description</label><input id="event-description" name="description" required maxlength="180" placeholder="What will happen?"></div><button class="button button-small" type="submit" id="event-submit">Add event</button></form>
+        <div class="managed-events">${events.map((event) => `<div class="managed-event"><div><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.date)} · ${escapeHtml(event.location)}</span></div><div class="managed-actions"><button type="button" data-edit-event="${escapeHtml(event.id)}">Edit</button><button type="button" data-delete-event="${escapeHtml(event.id)}" aria-label="Delete ${escapeHtml(event.title)}">Delete</button></div></div>`).join("")}</div>
+        <div class="admin-hint">Event and order data is stored in this browser only. It is not shared across devices.</div>
+      </section>
+    </div>
+  </main>`;
 }
 
 function render() {
   const route = currentRoute();
+  app.dataset.page = route;
   let content;
   if (route === "/events") content = eventsPage();
   else if (route === "/committee") content = committeePage();
@@ -414,14 +476,24 @@ function bindCommon() {
 }
 
 function bindOrderForm() {
-  document.querySelector("#order-form").addEventListener("submit", (event) => {
+  document.querySelector("#order-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
     const data = new FormData(form);
     const order = Object.fromEntries(data.entries());
     if (window.asokaCreateOrder) {
-      window.asokaCreateOrder(order);
+      const submitButton = form.querySelector('button[type="submit"]');
+      const status = form.querySelector("#order-status");
+      submitButton.disabled = true;
+      submitButton.textContent = "Submitting…";
+      status.textContent = "Submitting your pre-order.";
+      try {
+        await window.asokaCreateOrder(order);
+      } finally {
+        submitButton.disabled = false;
+        submitButton.innerHTML = 'Place pre-order <span aria-hidden="true">→</span>';
+      }
       return;
     }
     order.id = `ord-${Date.now()}`;
@@ -456,18 +528,26 @@ function bindDashboard() {
   const filterOrders = () => {
     const size = filterSize.value;
     const grade = filterGrade.value;
-    document.querySelectorAll("#orders-body tr[data-size]").forEach((row) => {
-      row.hidden = Boolean((size && row.dataset.size !== size) || (grade && row.dataset.grade !== grade));
-    });
+    const rows = [...document.querySelectorAll("#orders-body tr[data-size]")];
+    const visibleCount = rows.filter((row) => {
+      const hidden = Boolean((size && row.dataset.size !== size) || (grade && row.dataset.grade !== grade));
+      row.hidden = hidden;
+      return !hidden;
+    }).length;
+    const status = document.querySelector("#orders-status");
+    status.textContent = visibleCount
+      ? `Showing ${visibleCount} of ${rows.length} pre-orders.`
+      : "No pre-orders match the selected filters.";
   };
   filterSize.addEventListener("change", filterOrders);
   filterGrade.addEventListener("change", filterOrders);
   const orderHeader = orderBody.closest("table").querySelector("thead tr");
   const actionsHeader = document.createElement("th");
   actionsHeader.textContent = "Actions";
+  actionsHeader.scope = "col";
   orderHeader.append(actionsHeader);
   const emptyCell = orderBody.querySelector(".empty-table");
-  if (emptyCell) emptyCell.colSpan = 6;
+  if (emptyCell) emptyCell.colSpan = 7;
   const orderedOrders = getOrders().slice().reverse();
   orderBody.querySelectorAll("tr[data-size]").forEach((row, index) => {
     const order = orderedOrders[index];
@@ -657,7 +737,7 @@ function editOrderRow(row, order) {
     sizeSelect.append(option);
   });
   row.cells[4].replaceChildren(sizeSelect);
-  const actionsCell = row.cells[5];
+  const actionsCell = row.cells[6];
   actionsCell.replaceChildren();
   const saveButton = document.createElement("button");
   saveButton.type = "button";

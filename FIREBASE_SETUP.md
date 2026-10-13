@@ -14,7 +14,7 @@ The app uses Firebase SDK 13.0.0 directly from Google's CDN and loads Auth and F
 
 ## Data boundaries
 
-User profiles and T-shirt orders are stored in Firestore. Website content, events, committee profiles, and uploaded images are still stored in the current browser's local storage; they do not sync across visitors or devices. Photo uploads use browser storage and should not be treated as shared production media storage.# Firebase setup
+User profiles and T-shirt orders are stored in Firestore. New orders include the signed-in student's account email, which Firestore rules validate against the authenticated email; older orders without that field remain readable. Website content, events, committee profiles, and uploaded images are still stored in the current browser's local storage; they do not sync across visitors or devices. Photo uploads use browser storage and should not be treated as shared production media storage.# Firebase setup
 
 The public site remains available without Firebase, but registration, approval, sign-in, and pre-orders require a Firebase project.
 

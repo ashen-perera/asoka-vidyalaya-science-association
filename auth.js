@@ -317,11 +317,12 @@ function renderApprovalQueue(profiles) {
     panel = document.createElement("section");
     panel.id = "pending-approval-panel";
     panel.className = "admin-panel approval-panel";
+    panel.setAttribute("aria-labelledby", "pending-approvals-title");
     const dashboardGrid = document.querySelector(".admin-grid");
     if (!dashboardGrid) return;
     dashboardGrid.insertAdjacentElement("beforebegin", panel);
   }
-  const markup = `<div class="admin-panel-head"><h2>Pending user approvals</h2><span class="eyebrow">${profiles.length} pending</span></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Type</th><th>Grade / class</th><th>Action</th></tr></thead><tbody>${profiles.length ? profiles.map((profile) => `<tr><td>${escapeText(profile.name)}</td><td>${escapeText(profile.email)}</td><td>${escapeText(profile.role === "main-admin" ? "Main admin" : profile.role)}</td><td>${escapeText(profile.grade || "—")}</td><td><div class="approval-actions"><button type="button" data-approve-account="${escapeText(profile.id)}">Approve</button><button type="button" data-reject-account="${escapeText(profile.id)}">Reject</button></div></td></tr>`).join("") : "<tr><td colspan=\"5\" class=\"empty-table\">No pending user approvals.</td></tr>"}</tbody></table></div>`;
+  const markup = `<div class="admin-panel-head"><h2 id="pending-approvals-title">Pending user approvals</h2><span class="eyebrow" role="status" aria-live="polite">${profiles.length} pending</span></div><div class="table-wrap" role="region" aria-label="Pending user approvals" tabindex="0"><table class="data-table"><caption class="sr-only">Pending user approvals</caption><thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Type</th><th scope="col">Grade / class</th><th scope="col">Action</th></tr></thead><tbody>${profiles.length ? profiles.map((profile) => `<tr><th scope="row">${escapeText(profile.name)}</th><td>${escapeText(profile.email)}</td><td>${escapeText(profile.role === "main-admin" ? "Main admin" : profile.role)}</td><td>${escapeText(profile.grade || "—")}</td><td><div class="approval-actions"><button type="button" aria-label="Approve ${escapeText(profile.name)}" data-approve-account="${escapeText(profile.id)}">Approve</button><button type="button" aria-label="Reject ${escapeText(profile.name)}" data-reject-account="${escapeText(profile.id)}">Reject</button></div></td></tr>`).join("") : "<tr><td colspan=\"5\" class=\"empty-table\">No pending user approvals.</td></tr>"}</tbody></table></div>`;
   if (panel.innerHTML === markup) return;
   panel.innerHTML = markup;
   panel.querySelectorAll("[data-approve-account]").forEach((button) => button.addEventListener("click", () => reviewAccount(button.dataset.approveAccount, "approved")));
@@ -364,7 +365,7 @@ function getLocalPendingProfiles() {
 
 function renderApprovalQueueError(message) {
   const panel = document.querySelector("#pending-approval-panel");
-  if (panel) panel.insertAdjacentHTML("beforeend", `<p class="auth-error">${escapeText(message)}</p>`);
+  if (panel) panel.insertAdjacentHTML("beforeend", `<p class="auth-error" role="alert">${escapeText(message)}</p>`);
 }
 
 function subscribeToApprovals() {
@@ -445,13 +446,18 @@ window.asokaCreateOrder = async (values) => {
       grade: values.grade,
       phone: values.phone,
       size: values.size,
+      ...(auth.currentUser.email ? { email: auth.currentUser.email } : {}),
       createdAt: modules.firestore.serverTimestamp(),
     });
     sessionStorage.setItem("asoka-order-success", `Thank you, ${values.name}. Your ${values.size} T-shirt pre-order is confirmed.`);
     window.render?.();
   } catch (error) {
-    const status = document.querySelector("#order-form .form-footnote");
-    if (status) status.textContent = friendlyError(error);
+    const status = document.querySelector("#order-status");
+    if (status) {
+      status.setAttribute("role", "alert");
+      status.setAttribute("aria-live", "assertive");
+      status.textContent = friendlyError(error);
+    }
   }
 };
 
