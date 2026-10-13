@@ -433,6 +433,11 @@ window.asokaSignOut = async () => {
   location.hash = "/admin/login";
 };
 
+function apiUrl(path) {
+  const baseUrl = (window.ASOKA_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  return `${baseUrl}${path}`;
+}
+
 window.asokaCreateOrder = async (formData) => {
   if (!auth?.currentUser || currentProfile?.role !== "student" || currentProfile.status !== "approved") {
     location.hash = "/admin/login";
@@ -440,12 +445,21 @@ window.asokaCreateOrder = async (formData) => {
   }
   try {
     const token = await auth.currentUser.getIdToken();
-    const response = await fetch("/api/preorder", {
+    const response = await fetch(apiUrl("/api/preorder"), {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-    const result = await response.json();
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw new Error("The pre-order API is not available. Set the Node.js server URL in api-config.js and allow this website in the server's CORS_ORIGINS setting. GitHub Pages cannot process pre-orders by itself.");
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      throw new Error("The pre-order server returned an invalid response. Please try again later.");
+    }
     if (!response.ok || !result.success) {
       const status = document.querySelector("#order-status");
       if (status) {
@@ -476,7 +490,7 @@ window.asokaDownloadPaymentSlip = async (orderId) => {
   }
   try {
     const token = await auth.currentUser.getIdToken();
-    const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}/payment-slip`, {
+    const response = await fetch(apiUrl(`/api/admin/orders/${encodeURIComponent(orderId)}/payment-slip`), {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {

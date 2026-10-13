@@ -26,6 +26,7 @@ const publicFiles = new Set([
   "index.html",
   "styles.css",
   "app.js",
+  "api-config.js",
   "auth.js",
   "firebase-config.js",
   "download.jpg",
@@ -52,9 +53,27 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim()) {
 
 if (process.env.TRUST_PROXY === "1") app.set("trust proxy", 1);
 app.disable("x-powered-by");
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean)
+);
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "same-origin");
+  const origin = req.get("origin");
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Vary", "Origin");
+  }
+  if (req.method === "OPTIONS" && req.path.startsWith("/api/")) {
+    if (!origin || !allowedOrigins.has(origin)) {
+      res.status(403).json({ success: false, message: "This website is not allowed to access the order API." });
+      return;
+    }
+    res.status(204).end();
+    return;
+  }
   next();
 });
 

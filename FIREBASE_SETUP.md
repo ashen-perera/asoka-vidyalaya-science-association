@@ -49,11 +49,22 @@ directory, writes the order to Firestore, and can send a confirmation email.
 ## Hosting
 
 The pre-order API and private upload handling require a Node.js host with
-persistent private storage; GitHub Pages alone cannot run them. Deploy this
-project as a Node.js service, set the environment variables in the host's
-private configuration, and use that same host for the website and `/api`
-requests. Do not expose `.env`, Firebase service-account credentials, or the
-private upload directory.
+persistent private storage; GitHub Pages alone cannot run them. To keep the
+website on GitHub Pages:
+
+1. Deploy this project as a Node.js web service on a host that provides
+   persistent private storage for uploaded payment slips.
+2. Set the server environment variables in the host's private configuration.
+   Set `CORS_ORIGINS=https://ashen-perera.github.io` to allow this GitHub Pages
+   origin to call the API.
+3. Set `window.ASOKA_API_BASE_URL` in `api-config.js` to the deployed service's
+   HTTPS origin, with no trailing slash, then publish the updated site.
+4. Add `ashen-perera.github.io` to Firebase Authentication's authorized domains.
+
+The same API URL is used for order submissions and admin payment-slip downloads.
+Do not expose `.env`, Firebase service-account credentials, or the private
+upload directory. Alternatively, host both the website and API on the Node.js
+service to keep the API same-origin.
 
 Website content, events, committee profiles, and uploaded event images continue
 to use browser local storage and are not synchronized between visitors.
