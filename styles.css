@@ -646,7 +646,7 @@ button:disabled { cursor: wait; opacity: 0.72; }
 }
 
 .preorder-card {
-  width: min(620px, 100%);
+  width: min(720px, 100%);
   padding: clamp(22px, 5vw, 38px);
   border: 1px solid #334155;
   border-radius: 18px;
@@ -676,6 +676,7 @@ button:disabled { cursor: wait; opacity: 0.72; }
 .preorder-product strong { color: #f8fafc; }
 .preorder-product span { color: #fbbf24; font-size: 0.88rem; }
 .preorder-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.preorder-fields .field-full { grid-column: 1 / -1; }
 .preorder-card .field { min-width: 0; gap: 7px; }
 .preorder-card .field label { color: #f1f5f9; font-size: 0.9rem; }
 .preorder-card .field input,
@@ -688,6 +689,16 @@ button:disabled { cursor: wait; opacity: 0.72; }
 }
 .preorder-card .field input::placeholder { color: #cbd5e1; opacity: 0.75; }
 .preorder-card .field input[readonly] { background: #273449; }
+.preorder-card .field input[type="file"] { height: auto; padding: 10px; }
+.preorder-card .field input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: #475569;
+  color: #f8fafc;
+  cursor: pointer;
+}
 .preorder-card .field-hint { color: #cbd5e1; font-size: 0.78rem; }
 .preorder-card .form-footnote {
   margin: 18px 0 0;
@@ -807,6 +818,7 @@ button:disabled { cursor: wait; opacity: 0.72; }
 @media (max-width: 620px) {
   .preorder-page { min-height: auto; padding: 28px 16px; }
   .preorder-fields { grid-template-columns: 1fr; }
+  .preorder-fields .field-full { grid-column: auto; }
   .preorder-product { align-items: flex-start; flex-direction: column; }
   #app[data-page="/admin/dashboard"] .dashboard-top { flex-direction: row !important; }
   #app[data-page="/admin/dashboard"] .admin-panel { padding: 16px; }

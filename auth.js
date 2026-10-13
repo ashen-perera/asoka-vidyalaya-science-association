@@ -433,30 +433,74 @@ window.asokaSignOut = async () => {
   location.hash = "/admin/login";
 };
 
-window.asokaCreateOrder = async (values) => {
+window.asokaCreateOrder = async (formData) => {
   if (!auth?.currentUser || currentProfile?.role !== "student" || currentProfile.status !== "approved") {
     location.hash = "/admin/login";
     return;
   }
   try {
-    await modules.firestore.addDoc(modules.firestore.collection(database, "orders"), {
-      uid: auth.currentUser.uid,
-      name: values.name,
-      admission: values.admission,
-      grade: values.grade,
-      phone: values.phone,
-      size: values.size,
-      ...(auth.currentUser.email ? { email: auth.currentUser.email } : {}),
-      createdAt: modules.firestore.serverTimestamp(),
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch("/api/preorder", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
     });
-    sessionStorage.setItem("asoka-order-success", `Thank you, ${values.name}. Your ${values.size} T-shirt pre-order is confirmed.`);
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      const status = document.querySelector("#order-status");
+      if (status) {
+        status.setAttribute("role", "alert");
+        status.setAttribute("aria-live", "assertive");
+        status.textContent = result.message || "Could not submit the pre-order. Please try again.";
+      }
+      return;
+    }
+    sessionStorage.setItem("asoka-order-success", result.message);
     window.render?.();
   } catch (error) {
     const status = document.querySelector("#order-status");
     if (status) {
       status.setAttribute("role", "alert");
       status.setAttribute("aria-live", "assertive");
-      status.textContent = friendlyError(error);
+      status.textContent = error instanceof TypeError
+        ? "Could not reach the order server. Check your connection and try again."
+        : friendlyError(error);
+    }
+  }
+};
+
+window.asokaDownloadPaymentSlip = async (orderId) => {
+  if (!auth?.currentUser) {
+    location.hash = "/admin/login";
+    return;
+  }
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}/payment-slip`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      let result;
+      try { result = await response.json(); } catch { result = null; }
+      throw new Error(result?.message || "Could not download this payment slip.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "payment-slip";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    const status = document.querySelector("#orders-status");
+    if (status) {
+      status.setAttribute("role", "alert");
+      status.setAttribute("aria-live", "assertive");
+      status.textContent = error instanceof TypeError
+        ? "Could not reach the order server. Check your connection and try again."
+        : error.message;
     }
   }
 };

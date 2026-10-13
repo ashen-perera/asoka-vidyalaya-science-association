@@ -73,7 +73,10 @@ service cloud.firestore {
       allow create: if approvedStudent()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.keys().hasAll(['uid', 'name', 'admission', 'grade', 'phone', 'size', 'createdAt'])
-        && request.resource.data.keys().hasOnly(['uid', 'name', 'admission', 'grade', 'phone', 'size', 'email', 'createdAt'])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'email',
+          'quantity', 'paymentSlip', 'reference', 'createdAt'
+        ])
         && request.resource.data.name is string
         && request.resource.data.admission is string
         && request.resource.data.grade is string
@@ -81,6 +84,12 @@ service cloud.firestore {
         && request.resource.data.size is string
         && (!request.resource.data.keys().hasAny(['email'])
           || request.resource.data.email == request.auth.token.email)
+        && (!request.resource.data.keys().hasAny(['quantity'])
+          || (request.resource.data.quantity is int && request.resource.data.quantity >= 1 && request.resource.data.quantity <= 10))
+        && (!request.resource.data.keys().hasAny(['paymentSlip'])
+          || request.resource.data.paymentSlip is string)
+        && (!request.resource.data.keys().hasAny(['reference'])
+          || request.resource.data.reference is string)
         && request.resource.data.createdAt is timestamp;
       allow get, list: if canManageSociety()
         || (approvedStudent() && resource.data.uid == request.auth.uid);

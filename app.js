@@ -355,6 +355,8 @@ function preorderPage() {
           <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required readonly value="${escapeHtml(profile?.email || "")}" aria-describedby="email-hint"><span class="field-hint" id="email-hint">Your account email is used for this order.</span></div>
           <div class="field"><label for="phone">Phone number</label><input id="phone" name="phone" type="tel" autocomplete="tel" required pattern="[0-9+ ]{7,16}" maxlength="16" placeholder="07X XXX XXXX" aria-describedby="phone-hint" value="${escapeHtml(profile?.phone || "")}"><span class="field-hint" id="phone-hint">Use 7–16 characters: digits, spaces or +.</span></div>
           <div class="field"><label for="size">T-shirt size</label><select id="size" name="size" required><option value="">Choose a size</option>${getSiteContent().sizes.map((item) => `<option value="${escapeHtml(item.size)}">${escapeHtml(item.size)}</option>`).join("")}</select></div>
+          <div class="field"><label for="quantity">Quantity</label><input id="quantity" name="quantity" type="number" min="1" max="10" step="1" value="1" required></div>
+          <div class="field field-full"><label for="payment-slip">Payment slip</label><input id="payment-slip" name="paymentSlip" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" aria-describedby="payment-slip-hint" required><span class="field-hint" id="payment-slip-hint">JPG, PNG, WEBP, or PDF. Maximum 5 MB. Your slip is stored privately.</span></div>
         </div>
         <p class="form-footnote" id="order-note">This is a pre-order request, not an online payment. Please check your contact number before submitting.</p>
         <p class="form-status" id="order-status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -379,10 +381,13 @@ function applyAccountGate(route) {
   let profile = null;
   try { profile = JSON.parse(sessionStorage.getItem("asoka-account-profile") || "null"); } catch { profile = null; }
   const localDemoEnabled = window.asokaLocalDemoMode === true;
-  const approvedStudent = profile?.status === "approved" && profile?.role === "student";
-  if ((!window.asokaFirebaseConfigured && !localDemoEnabled) || !approvedStudent) {
-    const message = !window.asokaFirebaseConfigured && !localDemoEnabled
-      ? "Online ordering will open after the society Firebase project is connected."
+  const approvedStudent = window.asokaFirebaseConfigured === true &&
+    profile?.status === "approved" &&
+    profile?.role === "student" &&
+    !localDemoEnabled;
+  if (!approvedStudent) {
+    const message = !window.asokaFirebaseConfigured || localDemoEnabled
+      ? "Pre-orders require an approved Firebase student account and the connected order server."
       : profile ? "Only approved student accounts can place a pre-order." : "Sign in with an approved student account to place a pre-order.";
     page.innerHTML = `<section class="preorder-card account-gate"><span class="eyebrow">Student account required</span><h1>Pre-orders are for approved students.</h1><p>${message}</p><div class="hero-actions"><a class="button" href="#/admin/login">Sign in</a><a class="button button-light" href="#/register">Register</a></div></section>`;
     return;
@@ -427,8 +432,8 @@ function dashboardPage() {
         <div class="table-wrap" role="region" aria-label="T-shirt pre-orders" tabindex="0">
           <table class="data-table">
             <caption class="sr-only">T-shirt pre-orders</caption>
-            <thead><tr><th scope="col">Student</th><th scope="col">Admission</th><th scope="col">Grade / class</th><th scope="col">Phone</th><th scope="col">Size</th><th scope="col">Email</th></tr></thead>
-            <tbody id="orders-body">${orders.length ? orders.slice().reverse().map((order) => `<tr data-size="${escapeHtml(order.size)}" data-grade="${escapeHtml(order.grade)}"><th scope="row">${escapeHtml(order.name)}</th><td>${escapeHtml(order.admission)}</td><td>${escapeHtml(order.grade)}</td><td>${escapeHtml(order.phone)}</td><td>${escapeHtml(order.size)}</td><td>${escapeHtml(order.email || "—")}</td></tr>`).join("") : `<tr><td colspan="6" class="empty-table">No pre-orders yet. New requests will appear here.</td></tr>`}</tbody>
+            <thead><tr><th scope="col">Student</th><th scope="col">Admission</th><th scope="col">Grade / class</th><th scope="col">Phone</th><th scope="col">Size</th><th scope="col">Email</th><th scope="col">Quantity</th><th scope="col">Payment slip</th></tr></thead>
+            <tbody id="orders-body">${orders.length ? orders.slice().reverse().map((order) => `<tr data-size="${escapeHtml(order.size)}" data-grade="${escapeHtml(order.grade)}"><th scope="row">${escapeHtml(order.name)}</th><td>${escapeHtml(order.admission)}</td><td>${escapeHtml(order.grade)}</td><td>${escapeHtml(order.phone)}</td><td>${escapeHtml(order.size)}</td><td>${escapeHtml(order.email || "—")}</td><td>${escapeHtml(order.quantity || 1)}</td><td>${order.paymentSlip ? `<button type="button" data-download-slip="${escapeHtml(order.id)}" aria-label="Download payment slip for ${escapeHtml(order.name)}">Download</button>` : "—"}</td></tr>`).join("") : `<tr><td colspan="8" class="empty-table">No pre-orders yet. New requests will appear here.</td></tr>`}</tbody>
           </table>
         </div>
       </section>
@@ -482,27 +487,17 @@ function bindOrderForm() {
     if (!form.reportValidity()) return;
     const data = new FormData(form);
     const order = Object.fromEntries(data.entries());
-    if (window.asokaCreateOrder) {
-      const submitButton = form.querySelector('button[type="submit"]');
-      const status = form.querySelector("#order-status");
-      submitButton.disabled = true;
-      submitButton.textContent = "Submitting…";
-      status.textContent = "Submitting your pre-order.";
-      try {
-        await window.asokaCreateOrder(order);
-      } finally {
-        submitButton.disabled = false;
-        submitButton.innerHTML = 'Place pre-order <span aria-hidden="true">→</span>';
-      }
-      return;
+    const submitButton = form.querySelector('button[type="submit"]');
+    const status = form.querySelector("#order-status");
+    submitButton.disabled = true;
+    submitButton.textContent = "Submitting…";
+    status.textContent = "Submitting your pre-order and payment slip.";
+    try {
+      await window.asokaCreateOrder(new FormData(form));
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Confirm pre-order";
     }
-    order.id = `ord-${Date.now()}`;
-    order.createdAt = new Date().toISOString();
-    const orders = getOrders();
-    orders.push(order);
-    writeStore("asoka-orders", orders);
-    sessionStorage.setItem("asoka-order-success", `Thank you, ${order.name}. Your ${order.size} T-shirt pre-order is confirmed.`);
-    render();
   });
 }
 
@@ -541,13 +536,16 @@ function bindDashboard() {
   };
   filterSize.addEventListener("change", filterOrders);
   filterGrade.addEventListener("change", filterOrders);
+  orderBody.querySelectorAll("[data-download-slip]").forEach((button) => {
+    button.addEventListener("click", () => window.asokaDownloadPaymentSlip(button.dataset.downloadSlip));
+  });
   const orderHeader = orderBody.closest("table").querySelector("thead tr");
   const actionsHeader = document.createElement("th");
   actionsHeader.textContent = "Actions";
   actionsHeader.scope = "col";
   orderHeader.append(actionsHeader);
   const emptyCell = orderBody.querySelector(".empty-table");
-  if (emptyCell) emptyCell.colSpan = 7;
+  if (emptyCell) emptyCell.colSpan = 9;
   const orderedOrders = getOrders().slice().reverse();
   orderBody.querySelectorAll("tr[data-size]").forEach((row, index) => {
     const order = orderedOrders[index];
@@ -737,7 +735,7 @@ function editOrderRow(row, order) {
     sizeSelect.append(option);
   });
   row.cells[4].replaceChildren(sizeSelect);
-  const actionsCell = row.cells[6];
+  const actionsCell = row.cells[8];
   actionsCell.replaceChildren();
   const saveButton = document.createElement("button");
   saveButton.type = "button";
