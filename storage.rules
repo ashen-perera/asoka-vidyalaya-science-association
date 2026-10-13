@@ -1,0 +1,55 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function mainAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'ashenperera993@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function approvedAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && (firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function approvedStudent() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && (firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function canManageSociety() {
+      return mainAdmin() || approvedAdmin();
+    }
+
+    match /payment-slips/{uid}/{orderId} {
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && approvedStudent()
+        && orderId.matches('[A-Za-z0-9_-]{20}')
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType in [
+          'image/jpeg', 'image/png', 'image/webp', 'application/pdf'
+        ];
+      allow read: if canManageSociety();
+      allow delete: if canManageSociety()
+        || (signedIn()
+          && request.auth.uid == uid
+          && approvedStudent()
+          && !firestore.exists(/databases/(default)/documents/orders/$(orderId)));
+      allow update: if false;
+    }
+  }
+}

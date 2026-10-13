@@ -356,7 +356,7 @@ function preorderPage() {
           <div class="field"><label for="phone">Phone number</label><input id="phone" name="phone" type="tel" autocomplete="tel" required pattern="[0-9+ ]{7,16}" maxlength="16" placeholder="07X XXX XXXX" aria-describedby="phone-hint" value="${escapeHtml(profile?.phone || "")}"><span class="field-hint" id="phone-hint">Use 7–16 characters: digits, spaces or +.</span></div>
           <div class="field"><label for="size">T-shirt size</label><select id="size" name="size" required><option value="">Choose a size</option>${getSiteContent().sizes.map((item) => `<option value="${escapeHtml(item.size)}">${escapeHtml(item.size)}</option>`).join("")}</select></div>
           <div class="field"><label for="quantity">Quantity</label><input id="quantity" name="quantity" type="number" min="1" max="10" step="1" value="1" required></div>
-          <div class="field field-full"><label for="payment-slip">Payment slip</label><input id="payment-slip" name="paymentSlip" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" aria-describedby="payment-slip-hint" required><span class="field-hint" id="payment-slip-hint">JPG, PNG, WEBP, or PDF. Maximum 5 MB. Your slip is stored privately.</span></div>
+          <div class="field field-full"><label for="payment-slip">Payment slip</label><input id="payment-slip" name="paymentSlip" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" aria-describedby="payment-slip-hint" required><span class="field-hint" id="payment-slip-hint">JPG, PNG, WEBP, or PDF. Maximum 5 MB. Only approved society admins can view your slip.</span></div>
         </div>
         <p class="form-footnote" id="order-note">This is a pre-order request, not an online payment. Please check your contact number before submitting.</p>
         <p class="form-status" id="order-status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -387,7 +387,7 @@ function applyAccountGate(route) {
     !localDemoEnabled;
   if (!approvedStudent) {
     const message = !window.asokaFirebaseConfigured || localDemoEnabled
-      ? "Pre-orders require an approved Firebase student account and the connected order server."
+      ? "Pre-orders require an approved Firebase student account."
       : profile ? "Only approved student accounts can place a pre-order." : "Sign in with an approved student account to place a pre-order.";
     page.innerHTML = `<section class="preorder-card account-gate"><span class="eyebrow">Student account required</span><h1>Pre-orders are for approved students.</h1><p>${message}</p><div class="hero-actions"><a class="button" href="#/admin/login">Sign in</a><a class="button button-light" href="#/register">Register</a></div></section>`;
     return;

@@ -1,70 +1,37 @@
 # Site and pre-order setup
 
-The site uses Firebase Authentication and Cloud Firestore. Pre-orders require the
-student to be signed in with an approved student account. The Node.js server
-validates that account, stores uploaded payment slips outside the public site
-directory, writes the order to Firestore, and can send a confirmation email.
-
-## Run locally
-
-1. Install Node.js 22 or newer.
-2. Run `npm install` in the project directory.
-3. Copy `.env.example` to `.env` and configure the Firebase Admin service account
-   and email settings below.
-4. Run `npm start` and open `http://localhost:3000`. Do not open `index.html`
-   directly as a `file://` URL.
+The GitHub Pages site uses Firebase Authentication, Cloud Firestore, and Cloud
+Storage directly from the browser. Approved students submit order details to
+Firestore and upload payment slips to a private Storage path. No Node.js
+pre-order API or email service is used.
 
 ## Firebase configuration
 
 1. Enable **Authentication → Sign-in method → Email/Password** and create a
    Firestore database.
 2. Set up the Firebase Web app values in `firebase-config.js`. These web
-   configuration values are public; Firestore rules and Authentication enforce
-   access.
-3. Create a Firebase service account in **Project settings → Service accounts**.
-   Put its JSON contents in the `FIREBASE_SERVICE_ACCOUNT_JSON` environment
-   variable on the Node host. Keep the private key secret; never commit it or
-   place it in browser code.
-4. Publish `firestore.rules` in **Firestore Database → Rules**.
-5. Add `localhost` and the production website host to Firebase Authentication's
-   authorized domains.
+   configuration values are public; Firestore and Storage rules enforce access.
+3. Add `ashen-perera.github.io` to Firebase Authentication's authorized domains.
+4. In **Storage**, create the default bucket. Firebase may require enabling the
+   Blaze billing plan for Cloud Storage; review Firebase's current plan and
+   storage pricing before enabling it.
+5. Publish `firestore.rules` in **Firestore Database → Rules** and
+   `storage.rules` in **Storage → Rules**.
 6. Register and verify `ashenperera993@gmail.com`; that verified account is the
-   only account allowed to approve registrations.
+   only account allowed to approve registrations and view payment slips.
 
-## Email and uploads
+## Orders and payment slips
 
-- Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and the verified
-  sender address `EMAIL_FROM`. Without valid email settings, orders are still
-  saved and the confirmation message explains that email is unavailable.
-- Payment slips must be JPG, PNG, WEBP, or PDF files no larger than 5 MB. The
-  server checks file signatures and keeps them outside the publicly served
-  website directory.
-- Set `PRIVATE_UPLOAD_DIR` to persistent private storage on the Node host.
-  Uploaded payment slips are not included in Firestore backups.
-- If the production host sits behind a trusted reverse proxy, set `TRUST_PROXY=1`
-  so order rate limits use the visitor IP. Leave it off otherwise.
-- The order dashboard shows the saved order and lets an approved admin download
-  its payment slip. Older orders without a slip continue to display normally.
-
-## Hosting
-
-The pre-order API and private upload handling require a Node.js host with
-persistent private storage; GitHub Pages alone cannot run them. To keep the
-website on GitHub Pages:
-
-1. Deploy this project as a Node.js web service on a host that provides
-   persistent private storage for uploaded payment slips.
-2. Set the server environment variables in the host's private configuration.
-   Set `CORS_ORIGINS=https://ashen-perera.github.io` to allow this GitHub Pages
-   origin to call the API.
-3. Set `window.ASOKA_API_BASE_URL` in `api-config.js` to the deployed service's
-   HTTPS origin, with no trailing slash, then publish the updated site.
-4. Add `ashen-perera.github.io` to Firebase Authentication's authorized domains.
-
-The same API URL is used for order submissions and admin payment-slip downloads.
-Do not expose `.env`, Firebase service-account credentials, or the private
-upload directory. Alternatively, host both the website and API on the Node.js
-service to keep the API same-origin.
-
-Website content, events, committee profiles, and uploaded event images continue
-to use browser local storage and are not synchronized between visitors.
+- Pre-orders require a signed-in, email-verified, approved student account.
+- Order details are written to the `orders` Firestore collection. Payment slips
+  must be JPG, PNG, WEBP, or PDF files no larger than 5 MB and are stored at
+  `payment-slips/{studentUid}/{orderId}` in Cloud Storage.
+- Storage rules allow only approved students to upload their own slips.
+  Download access is limited to the main administrator and approved society
+  admins.
+- Confirmation emails are not sent by this direct Firebase integration. The
+  website confirms submission on screen; the society committee can contact
+  students using the saved account email.
+- Website content, events, committee profiles, and uploaded event images
+  continue to use browser local storage and are not synchronized between
+  visitors.
