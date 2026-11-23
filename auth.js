@@ -1,0 +1,788 @@
+const MAIN_ADMIN_EMAIL = "ashenperera993@gmail.com";
+const FIREBASE_VERSION = "13.0.0";
+const ENABLE_FIREBASE = true;
+let auth;
+let database;
+let storage;
+let modules;
+let currentProfile = null;
+let ordersUnsubscribe;
+let legacyOrdersUnsubscribe;
+let registrationsUnsubscribe;
+let approvalUnsubscribe;
+let firebaseConfigured = false;
+let emailjsConfig;
+let emailjsLoadPromise;
+let registrationSnapshotData = "";
+let newOrderSnapshot = [];
+let legacyOrderSnapshot = [];
+let newOrdersLoaded = false;
+let legacyOrdersLoaded = false;
+
+window.asokaFirebaseConfigured = false;
+window.asokaLocalDemoMode = false;
+window.asokaRegistrations = [];
+
+function getLocalAccounts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("asoka-local-accounts") || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalAccounts(accounts) {
+  localStorage.setItem("asoka-local-accounts", JSON.stringify(accounts));
+}
+
+function ensureLocalDemoAdmin() {
+  return getLocalAccounts();
+}
+
+function createLocalProfileFromValues(values, uid) {
+  const email = String(values.email || "").trim().toLowerCase();
+  const isMainAdmin = email === MAIN_ADMIN_EMAIL;
+  const role = isMainAdmin ? "main_admin" : (values.role || "student");
+  return {
+    uid,
+    name: String(values.name || "").trim(),
+    email,
+    password: String(values.password || ""),
+    role,
+    status: isMainAdmin ? "approved" : "pending",
+    approved: isMainAdmin,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function setLocalProfile(profile) {
+  const safeProfile = { ...profile };
+  delete safeProfile.password;
+  const normalized = normalizeProfile({ ...safeProfile, approved: safeProfile.approved ?? safeProfile.status === "approved" }, safeProfile.uid || "local-user");
+  currentProfile = normalized;
+  sessionStorage.setItem("asoka-account-profile", JSON.stringify(normalized));
+  if (["admin", "main_admin"].includes(normalized.role) && normalized.status === "approved") sessionStorage.setItem("asoka-admin-auth", "true");
+  else sessionStorage.removeItem("asoka-admin-auth");
+  window.asokaLocalDemoMode = true;
+  if (["/admin/login", "/register"].includes(route())) {
+    const target = normalized.role === "student" ? "/pre-order" : "/admin/dashboard";
+    location.hash = target;
+    window.render?.();
+  }
+}
+
+function localAccountError(message) {
+  setMessage(message, true);
+}
+
+const escapeText = (value = "") => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+const route = () => (location.hash.replace(/^#/, "") || "/").replace(/\/$/, "") || "/";
+
+function setMessage(message, isError = false) {
+  const target = document.querySelector(isError ? "#login-error, #register-error" : "#auth-message");
+  if (!target) return;
+  target.textContent = message;
+  target.hidden = false;
+}
+
+function setSession(profile) {
+  currentProfile = normalizeProfile(profile);
+  sessionStorage.setItem("asoka-account-profile", JSON.stringify(currentProfile));
+  if (["admin", "main_admin"].includes(currentProfile.role) && currentProfile.status === "approved") sessionStorage.setItem("asoka-admin-auth", "true");
+  else sessionStorage.removeItem("asoka-admin-auth");
+}
+
+function normalizeProfile(profile, uid) {
+  const role = profile.role === "main-admin" ? "main_admin" : profile.role;
+  const status = profile.status || (profile.approved === true ? "approved" : "pending");
+  return { ...profile, ...(uid ? { uid } : {}), role, status, approved: profile.approved ?? status === "approved" };
+}
+
+function clearSession() {
+  currentProfile = null;
+  sessionStorage.removeItem("asoka-account-profile");
+  sessionStorage.removeItem("asoka-admin-auth");
+  ordersUnsubscribe?.();
+  legacyOrdersUnsubscribe?.();
+  registrationsUnsubscribe?.();
+  approvalUnsubscribe?.();
+  ordersUnsubscribe = undefined;
+  legacyOrdersUnsubscribe = undefined;
+  registrationsUnsubscribe = undefined;
+  approvalUnsubscribe = undefined;
+  newOrderSnapshot = [];
+  legacyOrderSnapshot = [];
+  newOrdersLoaded = false;
+  legacyOrdersLoaded = false;
+  registrationSnapshotData = "";
+  window.asokaRegistrations = [];
+}
+
+function bindRegistrationForm() {
+  const form = document.querySelector("#register-form");
+  if (!form || form.dataset.firebaseBound) return;
+  form.dataset.firebaseBound = "true";
+  const roleSelect = form.elements.namedItem("role");
+  const emailInput = form.elements.namedItem("email");
+  const studentFields = [...form.querySelectorAll(".student-fields")];
+  const mainAdminOption = roleSelect.querySelector('option[value="main_admin"]');
+  const updateStudentFields = () => {
+    const isMainAdmin = emailInput.value.trim().toLowerCase() === MAIN_ADMIN_EMAIL;
+    mainAdminOption.hidden = !isMainAdmin;
+    roleSelect.disabled = isMainAdmin;
+    if (isMainAdmin) roleSelect.value = "main_admin";
+    else if (roleSelect.value === "main_admin") roleSelect.value = "student";
+    const needsStudentInfo = roleSelect.value === "student";
+    studentFields.forEach((field) => {
+      field.hidden = !needsStudentInfo;
+      const input = field.querySelector("input");
+      input.required = needsStudentInfo;
+    });
+  };
+  roleSelect.addEventListener("change", updateStudentFields);
+  emailInput.addEventListener("input", updateStudentFields);
+  updateStudentFields();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const values = Object.fromEntries(new FormData(form).entries());
+    const email = String(values.email || "").trim().toLowerCase();
+    const isMainAdmin = email === MAIN_ADMIN_EMAIL;
+    const role = isMainAdmin ? "main_admin" : (values.role || "student");
+
+    if (!firebaseConfigured) {
+      if (!window.asokaLocalDemoMode) {
+        setMessage("Firebase is not ready. Check the connection and try again.", true);
+        return;
+      }
+      const accounts = getLocalAccounts();
+      if (accounts.some((account) => account.email === email)) {
+        setMessage("An account already uses that email. Try signing in instead.", true);
+        return;
+      }
+      if (values.password && values.password.length < 8) {
+        setMessage("Use a password with at least 8 characters.", true);
+        return;
+      }
+      const localProfile = createLocalProfileFromValues(values, `local-${Date.now()}`);
+      accounts.push(localProfile);
+      saveLocalAccounts(accounts);
+      setMessage(isMainAdmin
+        ? "The local admin account is ready. Use the same email and password to sign in, and this admin account will be treated as approved."
+        : "Registration received. In local demo mode, your account is saved on this device and can be approved by the main administrator account.");
+      window.asokaLocalDemoMode = true;
+      form.reset();
+      updateStudentFields();
+      return;
+    }
+
+    try {
+      const credential = await modules.auth.createUserWithEmailAndPassword(auth, email, values.password);
+      await modules.auth.sendEmailVerification(credential.user);
+      if (!isMainAdmin) {
+        const profile = {
+          name: values.name.trim(),
+          email,
+          role,
+          status: "pending",
+          approved: false,
+          createdAt: modules.firestore.serverTimestamp(),
+        };
+        if (role === "student") Object.assign(profile, { admission: values.admission.trim(), grade: values.grade.trim(), phone: values.phone.trim() });
+        await modules.firestore.setDoc(modules.firestore.doc(database, "users", credential.user.uid), profile);
+      }
+      await modules.auth.signOut(auth);
+      setMessage(isMainAdmin
+        ? "Check this inbox to verify the main-admin address, then sign in. Its verified Firebase account is the approval authority."
+        : "Registration received. Verify your email, then wait for the main administrator to approve your account.");
+      form.reset();
+      updateStudentFields();
+    } catch (error) {
+      if (auth?.currentUser) await modules.auth.signOut(auth).catch(() => {});
+      setMessage(friendlyError(error), true);
+    }
+  });
+}
+
+function friendlyError(error) {
+  const known = {
+    "auth/email-already-in-use": "An account already uses that email. Try signing in instead.",
+    "auth/invalid-credential": "The email or password was not accepted.",
+    "auth/weak-password": "Use a password with at least 8 characters.",
+    "auth/invalid-email": "Enter a valid email address.",
+    "auth/network-request-failed": "Could not reach Firebase. Check your connection and authorized domains, then try again.",
+    "permission-denied": "Firebase denied this action. Check that the Firestore rules are deployed.",
+    "storage/unauthorized": "Firebase Storage denied this action. Check that storage.rules is deployed and the account is approved.",
+  };
+  return known[error.code] || error.message || "Something went wrong. Please try again.";
+}
+
+async function ensureMainAdminProfile(user) {
+  const reference = modules.firestore.doc(database, "users", user.uid);
+  const snapshot = await modules.firestore.getDoc(reference);
+  if (!snapshot.exists()) {
+    await modules.firestore.setDoc(reference, {
+      name: user.displayName || "Main administrator",
+      email: MAIN_ADMIN_EMAIL,
+      role: "main_admin",
+      status: "approved",
+      approved: true,
+      createdAt: modules.firestore.serverTimestamp(),
+    });
+    return { name: user.displayName || "Main administrator", email: MAIN_ADMIN_EMAIL, role: "main_admin", status: "approved", approved: true };
+  }
+  return normalizeProfile(snapshot.data(), user.uid);
+}
+
+async function completeLogin(user) {
+  if (!user.emailVerified) {
+    await modules.auth.signOut(auth);
+    setMessage("Verify your email before signing in. Check the inbox for the address you registered.", true);
+    return false;
+  }
+  let profile;
+  if ((user.email || "").toLowerCase() === MAIN_ADMIN_EMAIL) {
+    profile = await ensureMainAdminProfile(user);
+  } else {
+    const reference = modules.firestore.doc(database, "users", user.uid);
+    const snapshot = await modules.firestore.getDoc(reference);
+    if (!snapshot.exists()) {
+      profile = {
+        name: user.displayName || (user.email || "student").split("@")[0],
+        email: (user.email || "").toLowerCase(),
+        role: "student",
+        status: "pending",
+        approved: false,
+        createdAt: modules.firestore.serverTimestamp(),
+      };
+      await modules.firestore.setDoc(reference, profile);
+      profile.createdAt = new Date().toISOString();
+      profile.uid = user.uid;
+    } else {
+      profile = normalizeProfile(snapshot.data(), user.uid);
+    }
+  }
+  profile = normalizeProfile(profile, user.uid);
+  if (profile.status !== "approved") {
+    await modules.auth.signOut(auth);
+    setMessage(profile.status === "rejected" ? "This account request was not approved. Contact the society." : "Your account is awaiting main-admin approval.", true);
+    return false;
+  }
+  setSession(profile);
+  if (route() === "/admin/login" || route() === "/register") {
+    const target = profile.role === "student" ? "/pre-order" : "/admin/dashboard";
+    location.hash = target;
+    window.render?.();
+    return true;
+  }
+  window.render?.();
+  return true;
+}
+
+function bindLoginForm() {
+  const form = document.querySelector("#login-form");
+  if (!form || form.dataset.firebaseBound) return;
+  form.dataset.firebaseBound = "true";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+
+    const values = new FormData(form);
+    const email = String(values.get("email") || "").trim().toLowerCase();
+    const password = String(values.get("password") || "");
+
+    if (!firebaseConfigured) {
+      if (!window.asokaLocalDemoMode) {
+        setMessage("Firebase is not ready. Check the connection and try again.", true);
+        return;
+      }
+      const accounts = ensureLocalDemoAdmin();
+      const match = accounts.find((account) => account.email === email && account.password === password);
+      if (!match) {
+        setMessage("No society account was found for this email. Register first.", true);
+        return;
+      }
+      if (match.status !== "approved") {
+        setMessage(match.status === "rejected" ? "This account request was not approved. Contact the society." : "Your account is awaiting main-admin approval.", true);
+        return;
+      }
+      setLocalProfile(match);
+      if (route() === "/admin/login" || route() === "/register") {
+        const target = match.role === "student" ? "/pre-order" : "/admin/dashboard";
+        location.hash = target;
+        window.render?.();
+        return;
+      }
+      window.render?.();
+      return;
+    }
+
+    try {
+      const result = await modules.auth.signInWithEmailAndPassword(auth, email, password);
+      await modules.auth.reload(result.user);
+      await completeLogin(result.user);
+    } catch (error) {
+      setMessage(friendlyError(error), true);
+    }
+  });
+}
+
+window.asokaBindAuthForms = () => {
+  bindLoginForm();
+  bindRegistrationForm();
+};
+
+function renderApprovalQueue(profiles) {
+  let panel = document.querySelector("#pending-approval-panel");
+  if (!panel) {
+    panel = document.createElement("section");
+    panel.id = "pending-approval-panel";
+    panel.className = "admin-panel approval-panel";
+    panel.setAttribute("aria-labelledby", "pending-approvals-title");
+    const dashboardGrid = document.querySelector(".admin-grid");
+    if (!dashboardGrid) return;
+    dashboardGrid.insertAdjacentElement("beforebegin", panel);
+  }
+  const markup = `<div class="admin-panel-head"><h2 id="pending-approvals-title">Pending user approvals</h2><span class="eyebrow" role="status" aria-live="polite">${profiles.length} pending</span></div><div class="table-wrap" role="region" aria-label="Pending user approvals" tabindex="0"><table class="data-table"><caption class="sr-only">Pending user approvals</caption><thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Type</th><th scope="col">Grade / class</th><th scope="col">Action</th></tr></thead><tbody>${profiles.length ? profiles.map((profile) => `<tr><th scope="row">${escapeText(profile.name)}</th><td>${escapeText(profile.email)}</td><td>${escapeText(profile.role === "main-admin" ? "Main admin" : profile.role)}</td><td>${escapeText(profile.grade || "—")}</td><td><div class="approval-actions"><button type="button" aria-label="Approve ${escapeText(profile.name)}" data-approve-account="${escapeText(profile.id)}">Approve</button><button type="button" aria-label="Reject ${escapeText(profile.name)}" data-reject-account="${escapeText(profile.id)}">Reject</button></div></td></tr>`).join("") : "<tr><td colspan=\"5\" class=\"empty-table\">No pending user approvals.</td></tr>"}</tbody></table></div>`;
+  if (panel.innerHTML === markup) return;
+  panel.innerHTML = markup;
+  panel.querySelectorAll("[data-approve-account]").forEach((button) => button.addEventListener("click", () => reviewAccount(button.dataset.approveAccount, "approved")));
+  panel.querySelectorAll("[data-reject-account]").forEach((button) => button.addEventListener("click", () => reviewAccount(button.dataset.rejectAccount, "rejected")));
+}
+
+async function reviewAccount(uid, status) {
+  if (!firebaseConfigured) {
+    const accounts = getLocalAccounts();
+    const accountIndex = accounts.findIndex((account) => account.uid === uid);
+    if (accountIndex < 0) return renderApprovalQueueError("That account request could not be found.");
+    accounts[accountIndex] = {
+      ...accounts[accountIndex],
+      status,
+      approved: status === "approved",
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: currentProfile?.uid || "local-main-admin",
+    };
+    saveLocalAccounts(accounts);
+    renderApprovalQueue(getLocalPendingProfiles());
+    return;
+  }
+  try {
+    await modules.firestore.updateDoc(modules.firestore.doc(database, "users", uid), {
+      status,
+      approved: status === "approved",
+      reviewedAt: modules.firestore.serverTimestamp(),
+      reviewedBy: auth.currentUser.uid,
+    });
+  } catch (error) {
+    renderApprovalQueueError(friendlyError(error));
+  }
+}
+
+function getLocalPendingProfiles() {
+  return getLocalAccounts()
+    .filter((account) => account.status === "pending")
+    .map((account) => ({ ...account, id: account.uid }));
+}
+
+function renderApprovalQueueError(message) {
+  const panel = document.querySelector("#pending-approval-panel");
+  if (panel) panel.insertAdjacentHTML("beforeend", `<p class="auth-error" role="alert">${escapeText(message)}</p>`);
+}
+
+function subscribeToApprovals() {
+  if (approvalUnsubscribe) return;
+  const pendingQuery = modules.firestore.query(modules.firestore.collection(database, "users"), modules.firestore.where("approved", "==", false));
+  approvalUnsubscribe = modules.firestore.onSnapshot(pendingQuery, (snapshot) => {
+    const profiles = snapshot.docs.map((item) => ({ ...item.data(), id: item.id })).filter((profile) => profile.status !== "rejected");
+    if (route() === "/admin/dashboard" && currentProfile?.role === "main_admin") renderApprovalQueue(profiles);
+  }, (error) => renderApprovalQueueError(friendlyError(error)));
+}
+
+function subscribeToOrders() {
+  if (ordersUnsubscribe || legacyOrdersUnsubscribe || !["admin", "main_admin"].includes(currentProfile?.role)) return;
+  ordersUnsubscribe = modules.firestore.onSnapshot(modules.firestore.collection(database, "tshirt_orders"), (snapshot) => {
+    newOrderSnapshot = snapshot.docs.map((item) => {
+      const order = item.data();
+      return { ...order, id: item.id, collection: "tshirt_orders", createdAt: order.createdAt?.toDate?.().toISOString() || "" };
+    });
+    newOrdersLoaded = true;
+    if (newOrdersLoaded && legacyOrdersLoaded) persistOrderSnapshots();
+  }, (error) => renderApprovalQueueError(friendlyError(error)));
+  legacyOrdersUnsubscribe = modules.firestore.onSnapshot(modules.firestore.collection(database, "orders"), (snapshot) => {
+    legacyOrderSnapshot = snapshot.docs.map((item) => {
+      const order = item.data();
+      return { ...order, id: item.id, collection: "orders", createdAt: order.createdAt?.toDate?.().toISOString() || "" };
+    });
+    legacyOrdersLoaded = true;
+    if (newOrdersLoaded && legacyOrdersLoaded) persistOrderSnapshots();
+  }, (error) => renderApprovalQueueError(friendlyError(error)));
+}
+
+function persistOrderSnapshots() {
+  const orders = [...legacyOrderSnapshot, ...newOrderSnapshot];
+  const serialized = JSON.stringify(orders);
+  if (localStorage.getItem("asoka-orders") !== serialized) {
+    localStorage.setItem("asoka-orders", serialized);
+    if (route() === "/admin/dashboard") window.render?.();
+  }
+}
+
+function subscribeToRegistrations() {
+  if (registrationsUnsubscribe || !["admin", "main_admin"].includes(currentProfile?.role)) return;
+  registrationsUnsubscribe = modules.firestore.onSnapshot(modules.firestore.collection(database, "event_registrations"), (snapshot) => {
+    const registrations = snapshot.docs.map((item) => {
+      const registration = item.data();
+      return { ...registration, id: item.id, createdAt: registration.createdAt?.toDate?.().toISOString() || "" };
+    });
+    const serialized = JSON.stringify(registrations);
+    if (registrationSnapshotData !== serialized) {
+      registrationSnapshotData = serialized;
+      window.asokaRegistrations = registrations;
+      if (route() === "/admin/dashboard") window.render?.();
+    }
+  }, (error) => renderApprovalQueueError(friendlyError(error)));
+}
+
+function setupDashboard() {
+  if (route() !== "/admin/dashboard" || !currentProfile) return;
+  subscribeToOrders();
+  subscribeToRegistrations();
+  if (currentProfile.role === "main_admin") subscribeToApprovals();
+}
+
+function setupRoute() {
+  bindLoginForm();
+  bindRegistrationForm();
+  if (!firebaseConfigured) {
+    if (ENABLE_FIREBASE) {
+      window.asokaLocalDemoMode = false;
+      if (route() === "/admin/login" || route() === "/register") {
+        setMessage("Firebase is not connected yet. Check the project configuration and network connection.", true);
+      }
+      return;
+    }
+    ensureLocalDemoAdmin();
+    window.asokaLocalDemoMode = true;
+    try {
+      const savedProfile = JSON.parse(sessionStorage.getItem("asoka-account-profile") || "null");
+      currentProfile = savedProfile ? normalizeProfile(savedProfile) : null;
+    } catch {
+      currentProfile = null;
+    }
+    if (route() === "/admin/login" || route() === "/register") {
+      setMessage("Local demo mode is active. The site works without Firebase, while the real Firebase project is still being configured.");
+    } else if (route() === "/admin/dashboard" && currentProfile?.role === "main_admin" && currentProfile.status === "approved") {
+      renderApprovalQueue(getLocalPendingProfiles());
+    }
+    return;
+  }
+  setupDashboard();
+}
+
+window.asokaSignOut = async () => {
+  if (auth) await modules.auth.signOut(auth);
+  clearSession();
+  location.hash = "/admin/login";
+};
+
+async function sendEmailConfirmation(templateId, templateParams) {
+  if (!emailjsConfig?.publicKey || !emailjsConfig?.serviceId || !templateId) return false;
+  if (!window.emailjs) {
+    if (!emailjsLoadPromise) {
+      emailjsLoadPromise = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js";
+        script.async = true;
+        script.addEventListener("load", resolve, { once: true });
+        script.addEventListener("error", () => reject(new Error("Could not load the EmailJS browser SDK.")), { once: true });
+        document.head.append(script);
+      });
+    }
+    await emailjsLoadPromise;
+  }
+  await window.emailjs.send(emailjsConfig.serviceId, templateId, templateParams, { publicKey: emailjsConfig.publicKey });
+  return true;
+}
+
+window.asokaCreateRegistration = async (values) => {
+  if (!firebaseConfigured || !modules) throw new Error("Guest registration is temporarily unavailable because Firebase is not connected.");
+  const registration = {
+    eventName: String(values.eventName || "").trim(),
+    name: String(values.name || "").trim(),
+    school: String(values.school || "").trim(),
+    grade: String(values.grade || "").trim(),
+    phone: String(values.phone || "").trim(),
+    email: String(values.email || "").trim(),
+    teamMembers: String(values.teamMembers || "").trim(),
+  };
+  if (!registration.eventName || registration.eventName.length > 120 ||
+      !registration.name || registration.name.length > 80 ||
+      !registration.school || registration.school.length > 120 ||
+      !registration.grade || registration.grade.length > 40 ||
+      !/^[0-9+ ]{7,16}$/.test(registration.phone) ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(registration.email) ||
+      registration.teamMembers.length > 500) {
+    throw new Error("Please check the registration details and try again.");
+  }
+  const registrationRef = modules.firestore.doc(modules.firestore.collection(database, "event_registrations"));
+  await modules.firestore.setDoc(registrationRef, {
+    ...registration,
+    reference: registrationRef.id,
+    createdAt: modules.firestore.serverTimestamp(),
+  });
+  let emailSent = false;
+  try {
+    emailSent = await sendEmailConfirmation(emailjsConfig?.registrationTemplateId, {
+      to_email: registration.email,
+      to_name: registration.name,
+      event_name: registration.eventName,
+      school: registration.school,
+      grade: registration.grade,
+      phone: registration.phone,
+      team_members: registration.teamMembers || "—",
+      reference: registrationRef.id,
+    });
+  } catch (error) {
+    console.error("Event registration was saved, but its confirmation email could not be sent.", error);
+  }
+  return { reference: registrationRef.id, emailSent };
+};
+
+window.asokaCreateOrder = async (formData) => {
+  if (!auth?.currentUser || currentProfile?.role !== "student" || currentProfile.status !== "approved") {
+    location.hash = "/admin/login";
+    return;
+  }
+  const paymentSlip = formData.get("paymentSlip");
+  const order = {
+    uid: auth.currentUser.uid,
+    name: String(formData.get("name") || "").trim(),
+    admission: String(formData.get("admission") || "").trim(),
+    grade: String(formData.get("grade") || "").trim(),
+    phone: String(formData.get("phone") || "").trim(),
+    size: String(formData.get("size") || ""),
+    email: auth.currentUser.email || "",
+    quantity: Number(formData.get("quantity")),
+  };
+  if (!(paymentSlip instanceof File) || paymentSlip.size === 0) {
+    showOrderError("Choose a payment slip before submitting your order.");
+    return;
+  }
+  if (paymentSlip.size > 5 * 1024 * 1024 ||
+      !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(paymentSlip.type)) {
+    showOrderError("Payment slip must be a JPG, PNG, WEBP, or PDF file no larger than 5 MB.");
+    return;
+  }
+  if (!order.name || order.name.length > 80 ||
+      !order.admission || order.admission.length > 20 ||
+      !order.grade || order.grade.length > 30 ||
+      !/^[0-9+ ]{7,16}$/.test(order.phone) ||
+      !["S", "M", "L", "XL", "XXL"].includes(order.size) ||
+      !Number.isInteger(order.quantity) || order.quantity < 1 || order.quantity > 10) {
+    showOrderError("Please check your order details and try again.");
+    return;
+  }
+
+  const orderRef = modules.firestore.doc(modules.firestore.collection(database, "tshirt_orders"));
+  const paymentSlipPath = `payment-slips/${auth.currentUser.uid}/${orderRef.id}`;
+  let uploadedSlip = false;
+  try {
+    const uploadTask = modules.storage.uploadBytesResumable(
+      modules.storage.ref(storage, paymentSlipPath),
+      paymentSlip,
+      { contentType: paymentSlip.type }
+    );
+    await new Promise((resolve, reject) => {
+      uploadTask.on("state_changed", (snapshot) => {
+        const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+        showOrderStatus(`Uploading payment slip… ${percent}%`);
+      }, reject, resolve);
+    });
+    uploadedSlip = true;
+    showOrderStatus("Payment slip uploaded. Saving your pre-order…");
+    await modules.firestore.setDoc(orderRef, {
+      ...order,
+      paymentSlip: paymentSlipPath,
+      reference: orderRef.id,
+      createdAt: modules.firestore.serverTimestamp(),
+    });
+    let emailSent = false;
+    try {
+      emailSent = await sendEmailConfirmation(emailjsConfig?.orderTemplateId, {
+        to_email: order.email,
+        to_name: order.name,
+        admission: order.admission,
+        grade: order.grade,
+        phone: order.phone,
+        size: order.size,
+        quantity: String(order.quantity),
+        reference: orderRef.id,
+      });
+    } catch (error) {
+      console.error("T-shirt pre-order was saved, but its confirmation email could not be sent.", error);
+    }
+    sessionStorage.setItem("asoka-order-success", orderRef.id);
+    sessionStorage.setItem("asoka-order-email-status", emailSent
+      ? "Confirmation email sent. The society committee will confirm collection details."
+      : "Pre-order saved. Email confirmation is not configured or could not be sent.");
+    window.render?.();
+  } catch (error) {
+    if (uploadedSlip) {
+      try {
+        await modules.storage.deleteObject(modules.storage.ref(storage, paymentSlipPath));
+      } catch (cleanupError) {
+        console.error("Could not remove an unlinked pre-order payment slip.", cleanupError);
+        showOrderError(`${friendlyError(error)} The uploaded slip could not be cleaned up; contact the society administrator.`);
+        return;
+      }
+    }
+    showOrderError(friendlyError(error));
+  }
+};
+
+function showOrderStatus(message) {
+  const status = document.querySelector("#order-status");
+  if (!status) return;
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.textContent = message;
+}
+
+function showOrderError(message) {
+  const status = document.querySelector("#order-status");
+  if (!status) return;
+  status.setAttribute("role", "alert");
+  status.setAttribute("aria-live", "assertive");
+  status.textContent = message;
+}
+
+window.asokaDownloadPaymentSlip = async (orderId, collectionName = "tshirt_orders") => {
+  if (!auth?.currentUser || !["admin", "main_admin"].includes(currentProfile?.role)) {
+    location.hash = "/admin/login";
+    return;
+  }
+  try {
+    const orderCollection = ["orders", "tshirt_orders"].includes(collectionName) ? collectionName : "tshirt_orders";
+    const orderSnapshot = await modules.firestore.getDoc(modules.firestore.doc(database, orderCollection, orderId));
+    const paymentSlipPath = orderSnapshot.data()?.paymentSlip;
+    if (!orderSnapshot.exists() || typeof paymentSlipPath !== "string" ||
+        !/^payment-slips\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(paymentSlipPath)) {
+      throw new Error("No valid payment slip is attached to this order.");
+    }
+    const slipRef = modules.storage.ref(storage, paymentSlipPath);
+    const [bytes, metadata] = await Promise.all([
+      modules.storage.getBytes(slipRef, 5 * 1024 * 1024),
+      modules.storage.getMetadata(slipRef),
+    ]);
+    const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" }[metadata.contentType];
+    if (!extension) throw new Error("The payment slip has an unsupported file type.");
+    const blob = new Blob([bytes], { type: metadata.contentType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `payment-slip-${orderId}.${extension}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    const status = document.querySelector("#orders-status");
+    if (status) {
+      status.setAttribute("role", "alert");
+      status.setAttribute("aria-live", "assertive");
+      status.textContent = friendlyError(error);
+    }
+  }
+};
+
+window.asokaUpdateOrder = async (id, changes, collectionName = "tshirt_orders") => {
+  const orderCollection = ["orders", "tshirt_orders"].includes(collectionName) ? collectionName : "tshirt_orders";
+  try { await modules.firestore.updateDoc(modules.firestore.doc(database, orderCollection, id), changes); }
+  catch (error) { renderApprovalQueueError(friendlyError(error)); }
+};
+
+window.asokaDeleteOrder = async (id, collectionName = "tshirt_orders") => {
+  const orderCollection = ["orders", "tshirt_orders"].includes(collectionName) ? collectionName : "tshirt_orders";
+  try {
+    const orderRef = modules.firestore.doc(database, orderCollection, id);
+    const snapshot = await modules.firestore.getDoc(orderRef);
+    const paymentSlipPath = snapshot.data()?.paymentSlip;
+    if (typeof paymentSlipPath === "string" &&
+        /^payment-slips\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(paymentSlipPath)) {
+      await modules.storage.deleteObject(modules.storage.ref(storage, paymentSlipPath));
+    }
+    await modules.firestore.deleteDoc(orderRef);
+  } catch (error) {
+    renderApprovalQueueError(friendlyError(error));
+  }
+};
+
+async function initializeFirebase() {
+  if (!ENABLE_FIREBASE) {
+    firebaseConfigured = false;
+    window.asokaFirebaseConfigured = false;
+    window.asokaLocalDemoMode = true;
+    setupRoute();
+    window.render?.();
+    return;
+  }
+
+  const { firebaseConfig, emailjsConfig: configuredEmailJS } = await import("./firebase-config.js");
+  emailjsConfig = configuredEmailJS;
+  const ready = ["apiKey", "authDomain", "projectId", "appId"].every((key) => firebaseConfig[key] && !firebaseConfig[key].startsWith("YOUR_"));
+  if (!ready) {
+    clearSession();
+    window.render?.();
+    setupRoute();
+    return;
+  }
+  try {
+    const [appSdk, authSdk, firestoreSdk, storageSdk] = await Promise.all([
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-app.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-auth.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-firestore.js`),
+      import(`https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-storage.js`),
+    ]);
+    modules = { auth: authSdk, firestore: firestoreSdk, storage: storageSdk };
+    const firebaseApp = appSdk.initializeApp(firebaseConfig);
+    auth = authSdk.getAuth(firebaseApp);
+    database = firestoreSdk.getFirestore(firebaseApp);
+    storage = storageSdk.getStorage(firebaseApp);
+    firebaseConfigured = true;
+    window.asokaFirebaseConfigured = true;
+    authSdk.onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        clearSession();
+        if (route() === "/pre-order" || route() === "/admin/dashboard") window.render?.();
+        return;
+      }
+      if (currentProfile?.uid === user.uid) return;
+      if (user.emailVerified) {
+        try { await completeLogin(user); } catch (error) { setMessage(friendlyError(error), true); }
+      }
+    });
+    setupRoute();
+    window.render?.();
+  } catch (error) {
+    console.error("Firebase initialization failed", error);
+    window.asokaFirebaseConfigured = false;
+    setupRoute();
+    window.render?.();
+    setMessage("Firebase could not start. Check the web config and authorized domain settings.", true);
+  }
+}
+
+const appRoot = document.querySelector("#app");
+let routeSyncQueued = false;
+new MutationObserver(() => {
+  if (routeSyncQueued) return;
+  routeSyncQueued = true;
+  requestAnimationFrame(() => {
+    routeSyncQueued = false;
+    setupRoute();
+  });
+}).observe(appRoot, { childList: true, subtree: true });
+
+window.addEventListener("hashchange", setupRoute);
+initializeFirebase();

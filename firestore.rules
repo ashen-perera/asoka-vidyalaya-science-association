@@ -1,0 +1,180 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function mainAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'ashenperera993@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function approvedAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function approvedStudent() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student'
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true);
+    }
+
+    function canManageSociety() {
+      return mainAdmin() || approvedAdmin();
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'pending'
+        && request.resource.data.approved == false
+        && request.resource.data.role in ['student', 'admin']
+        && request.resource.data.keys().hasAll(['name', 'email', 'role', 'status', 'approved', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['name', 'email', 'role', 'status', 'approved', 'createdAt', 'admission', 'grade', 'phone'])
+        && request.resource.data.name is string
+        && request.resource.data.createdAt is timestamp
+        && (request.resource.data.role != 'student'
+          || (request.resource.data.keys().hasAll(['admission', 'grade', 'phone'])
+            && request.resource.data.admission is string
+            && request.resource.data.grade is string
+            && request.resource.data.phone is string));
+
+      allow create: if mainAdmin()
+        && request.auth.uid == userId
+        && request.resource.data.email == 'ashenperera993@gmail.com'
+        && request.resource.data.role in ['main_admin', 'main-admin']
+        && request.resource.data.status == 'approved'
+        && request.resource.data.approved == true
+        && request.resource.data.createdAt is timestamp;
+
+      allow get: if signedIn() && (request.auth.uid == userId || mainAdmin());
+      allow list: if mainAdmin();
+
+      allow update: if mainAdmin()
+        && userId != request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approved', 'reviewedAt', 'reviewedBy'])
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.approved == (request.resource.data.status == 'approved');
+      allow delete: if mainAdmin() && userId != request.auth.uid;
+    }
+
+    match /event_registrations/{registrationId} {
+      allow create: if request.resource.data.keys().hasAll([
+          'eventName', 'name', 'school', 'grade', 'phone', 'email',
+          'teamMembers', 'reference', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'eventName', 'name', 'school', 'grade', 'phone', 'email',
+          'teamMembers', 'reference', 'createdAt'
+        ])
+        && request.resource.data.eventName is string
+        && request.resource.data.eventName.size() > 0
+        && request.resource.data.eventName.size() <= 120
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.school is string
+        && request.resource.data.school.size() > 0
+        && request.resource.data.school.size() <= 120
+        && request.resource.data.grade is string
+        && request.resource.data.grade.size() > 0
+        && request.resource.data.grade.size() <= 40
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('^[0-9+ ]{7,16}$')
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$')
+        && request.resource.data.teamMembers is string
+        && request.resource.data.teamMembers.size() <= 500
+        && request.resource.data.reference == registrationId
+        && request.resource.data.createdAt is timestamp;
+      allow get, list: if canManageSociety();
+      allow update, delete: if canManageSociety();
+    }
+
+    match /tshirt_orders/{orderId} {
+      allow create: if approvedStudent()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'email',
+          'quantity', 'paymentSlip', 'reference', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'email',
+          'quantity', 'paymentSlip', 'reference', 'createdAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.admission is string
+        && request.resource.data.admission.size() > 0
+        && request.resource.data.admission.size() <= 20
+        && request.resource.data.grade is string
+        && request.resource.data.grade.size() > 0
+        && request.resource.data.grade.size() <= 30
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('^[0-9+ ]{7,16}$')
+        && request.resource.data.size in ['S', 'M', 'L', 'XL', 'XXL']
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 1
+        && request.resource.data.quantity <= 10
+        && request.resource.data.paymentSlip == 'payment-slips/' + request.auth.uid + '/' + orderId
+        && request.resource.data.reference == orderId
+        && request.resource.data.createdAt is timestamp;
+      allow get, list: if canManageSociety()
+        || (approvedStudent() && resource.data.uid == request.auth.uid);
+      allow update: if canManageSociety()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'admission', 'grade', 'phone', 'size']);
+      allow delete: if canManageSociety();
+    }
+
+    match /orders/{orderId} {
+      allow create: if approvedStudent()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'email',
+          'quantity', 'paymentSlip', 'reference', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'admission', 'grade', 'phone', 'size', 'email',
+          'quantity', 'paymentSlip', 'reference', 'createdAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.admission is string
+        && request.resource.data.admission.size() > 0
+        && request.resource.data.admission.size() <= 20
+        && request.resource.data.grade is string
+        && request.resource.data.grade.size() > 0
+        && request.resource.data.grade.size() <= 30
+        && request.resource.data.phone is string
+        && request.resource.data.phone.matches('^[0-9+ ]{7,16}$')
+        && request.resource.data.size in ['S', 'M', 'L', 'XL', 'XXL']
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 1
+        && request.resource.data.quantity <= 10
+        && request.resource.data.paymentSlip == 'payment-slips/' + request.auth.uid + '/' + orderId
+        && request.resource.data.reference == orderId
+        && request.resource.data.createdAt is timestamp;
+      allow get, list: if canManageSociety()
+        || (approvedStudent() && resource.data.uid == request.auth.uid);
+      allow update: if canManageSociety()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'admission', 'grade', 'phone', 'size']);
+      allow delete: if canManageSociety();
+    }
+  }
+}
